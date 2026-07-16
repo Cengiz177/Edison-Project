@@ -1,5 +1,9 @@
-import torch
 import numpy as np
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
 
 class Config:
     # 环境参数
@@ -72,7 +76,9 @@ class Config:
             'buffer_size': 1000000,    # 经验回放缓冲区大小
             'batch_size': 512,         # 批次大小
             'hidden_layers': 5,
-            'device': torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # A string also works with PyTorch APIs and keeps the physical
+            # environment importable when training dependencies are absent.
+            'device': 'cuda' if torch is not None and torch.cuda.is_available() else 'cpu'
         },
         
         # 储能智能体

@@ -229,24 +229,29 @@ class EnergySystemEnv:
         }
         
     def _calculate_wind_power(self, wind_speed):
+        """Return wind-turbine power in kW for a wind speed in m/s.
+
+        A normalized cubic curve is used between cut-in and rated speed.
+        This avoids mixing the watt output of an aerodynamic formula with the
+        configured rated power, which is expressed in kW.
+        """
         params = self.physical_params['wind_turbine']
-        
-        if wind_speed < params['cut_in_speed']:
-            return 0
-        elif wind_speed > params['cut_out_speed']:
-            return 0
-        elif wind_speed <= params['rated_speed']:
-            m1 = params['air_density']
-            R = params['blade_radius']
-            jjj = 0
-            zsb = 5
-            yi = 1 / (1 / (zsb + 0.08 * jjj) - 0.0035 / (jjj**3 + 1))
-            Cp = 0.5176 * (116 / yi - 0.4 * jjj - 5) * math.exp(-21 / yi) + 0.0068 * zsb
-            
-            power = 0.5 * m1 * R**2 * wind_speed**3 * Cp * math.pi
-            return min(power, params['rated_power'])
-        else:
-            return params['rated_power']
+
+        wind_speed = self._to_scalar(wind_speed)
+        cut_in_speed = params['cut_in_speed']
+        rated_speed = params['rated_speed']
+        cut_out_speed = params['cut_out_speed']
+        rated_power = params['rated_power']
+
+        if wind_speed < cut_in_speed or wind_speed > cut_out_speed:
+            return 0.0
+        if wind_speed < rated_speed:
+            normalized_power = (
+                (wind_speed ** 3 - cut_in_speed ** 3)
+                / (rated_speed ** 3 - cut_in_speed ** 3)
+            )
+            return float(rated_power * normalized_power)
+        return float(rated_power)
     
     def _calculate_pv_power(self, temperature, light_intensity):
         params = self.physical_params['pv']
