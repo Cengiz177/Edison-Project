@@ -36,12 +36,18 @@ class Config:
         
         # 储能参数
         'battery': {
-            'capacity': 6000,     # 容量(kWh)
-            'voltage': 24,        # 电压(V)
-            'max_power': 6000,    # 最大功率(kW)
-            'min_soc': 0.2,       # 最小SOC
-            'max_soc': 0.8,       # 最大SOC
-            'initial_soc': 0.2,   # 初始SOC
+            # 16 柜 CATL EnerOne 1P：16 * 372.7 kWh = 5963.2 kWh。
+            'model': 'CATL EnerOne 1P (16 cabinets)',
+            'capacity': 5963.2,              # 额定能量(kWh)
+            'rated_voltage': 1331.2,         # 单柜额定电压(V)，不参与SOC计算
+            'max_charge_power': 5963.2,      # 最大充电功率(kW)
+            'max_discharge_power': 5963.2,   # 最大放电功率(kW)
+            # 当前为系统级建模假设，后续可根据PCS/实测数据调整。
+            'charge_efficiency': 0.95,
+            'discharge_efficiency': 0.95,
+            'min_soc': 0.2,                  # 最小SOC
+            'max_soc': 0.8,                  # 最大SOC
+            'initial_soc': 0.5,              # 初始SOC
         },
         
         # 电解槽参数

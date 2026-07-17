@@ -80,6 +80,7 @@ class EnergySystemEnv:
         self.soc = self.physical_params['battery']['initial_soc']
         self.total_hydrogen = 0
         self.switch_count = 0
+        self.requested_battery_power_history = []
         self.battery_power_history = []
         self.electrolyzer_power_history = [[] for _ in range(4)]
         self.current_theoretical_max_hydrogen = 0
@@ -111,8 +112,12 @@ class EnergySystemEnv:
         consumption_rate = result['consumption_rate']
         new_soc = result['new_soc']
         adjusted_battery_power = result['adjusted_battery_power']
+        requested_charge_power = result['requested_charge_power']
+        requested_discharge_power = result['requested_discharge_power']
+        actual_charge_power = result['actual_charge_power']
+        actual_discharge_power = result['actual_discharge_power']
         adjusted_electrolyzer_powers = result['adjusted_electrolyzer_powers']
-        adjusted_battery_power = round(self._to_scalar(adjusted_battery_power), 2)
+        adjusted_battery_power = self._to_scalar(adjusted_battery_power)
         
         current_battery_state = 0
         if adjusted_battery_power > 0:
@@ -130,6 +135,7 @@ class EnergySystemEnv:
         self.soc = new_soc
         self.total_hydrogen += hydrogen_produced
         self.switch_count += new_switches
+        self.requested_battery_power_history.append(battery_power)
         self.battery_power_history.append(adjusted_battery_power)
         for i, p in enumerate(adjusted_electrolyzer_powers):
             self.electrolyzer_power_history[i].append(p)
@@ -151,6 +157,12 @@ class EnergySystemEnv:
         info = {
             'wind_power': wind_power,
             'pv_power': pv_power,
+            'requested_battery_power': battery_power,
+            'requested_charge_power': requested_charge_power,
+            'requested_discharge_power': requested_discharge_power,
+            'actual_charge_power': actual_charge_power,
+            'actual_discharge_power': actual_discharge_power,
+            'actual_battery_power': adjusted_battery_power,
             'battery_power': adjusted_battery_power,
             'electrolyzer_powers': adjusted_electrolyzer_powers,
             'hydrogen_produced': hydrogen_produced,
@@ -287,8 +299,21 @@ class EnergySystemEnv:
         return float(np.clip(raw_power, 0.0, params['rated_power']))
     
     def _scale_battery_action(self, action):
-        max_power = self.physical_params['battery']['max_power']
-        return action * max_power
+        """Map a normalized action to requested net battery power in kW.
+
+        Positive power requests charging and negative power requests
+        discharging. Separate limits keep the mapping valid if the two ratings
+        differ in a later equipment revision.
+        """
+        action = self._to_scalar(action)
+        if not np.isfinite(action):
+            raise ValueError(f"Battery action must be finite, got {action}")
+
+        action = float(np.clip(action, -1.0, 1.0))
+        params = self.physical_params['battery']
+        if action >= 0.0:
+            return action * params['max_charge_power']
+        return action * params['max_discharge_power']
     
     def _scale_electrolyzer_action(self, action):
         max_power = self.physical_params['electrolyzer']['max_power']
@@ -306,9 +331,12 @@ class EnergySystemEnv:
         
         min_soc = battery_params['min_soc']
         max_soc = battery_params['max_soc']
-        max_battery_power = battery_params['max_power']
         battery_capacity = battery_params['capacity']
-        battery_voltage = battery_params['voltage']
+        max_charge_power = battery_params['max_charge_power']
+        max_discharge_power = battery_params['max_discharge_power']
+        charge_efficiency = battery_params['charge_efficiency']
+        discharge_efficiency = battery_params['discharge_efficiency']
+        time_step_hours = 1.0
         
         renewable_power = wind_power + pv_power
         
@@ -321,52 +349,78 @@ class EnergySystemEnv:
             adjusted_electrolyzer_powers.append(adjusted_power)
         
         requested_electrolyzer_power = sum(adjusted_electrolyzer_powers)
-        
-        max_discharge = -min((self.soc - min_soc) * battery_capacity * battery_voltage, max_battery_power)
-        max_charge = min((max_soc - self.soc) * battery_capacity * battery_voltage, max_battery_power)
-        
-        available_power_for_electrolyzers = renewable_power
-        if max_discharge < 0:
-            available_power_for_electrolyzers += abs(max_discharge)
-        
+
+        requested_charge_power = max(0.0, battery_power)
+        requested_discharge_power = max(0.0, -battery_power)
+
+        renewable_surplus = max(
+            0.0, renewable_power - requested_electrolyzer_power
+        )
+        renewable_deficit = max(
+            0.0, requested_electrolyzer_power - renewable_power
+        )
+
+        soc_charge_limit = max(
+            0.0,
+            (max_soc - self.soc) * battery_capacity
+            / (charge_efficiency * time_step_hours),
+        )
+        soc_discharge_limit = max(
+            0.0,
+            (self.soc - min_soc) * battery_capacity
+            * discharge_efficiency / time_step_hours,
+        )
+
+        actual_charge_power = min(
+            requested_charge_power,
+            renewable_surplus,
+            max_charge_power,
+            soc_charge_limit,
+        )
+        actual_discharge_power = min(
+            requested_discharge_power,
+            renewable_deficit,
+            max_discharge_power,
+            soc_discharge_limit,
+        )
+
+        available_power_for_electrolyzers = (
+            renewable_power + actual_discharge_power
+        )
         if requested_electrolyzer_power > available_power_for_electrolyzers:
-            reduction_factor = available_power_for_electrolyzers / requested_electrolyzer_power
-            
-            adjusted_electrolyzer_powers = [min(power * reduction_factor, elec_params['max_power']) for power in adjusted_electrolyzer_powers]
-            
-            total_electrolyzer_power = sum(adjusted_electrolyzer_powers)
-            
-            adjusted_battery_power = renewable_power - total_electrolyzer_power
-            
-            if adjusted_battery_power < max_discharge:
-                adjusted_battery_power = max_discharge
-                available_power = renewable_power + abs(max_discharge)
-                reduction_factor = available_power / total_electrolyzer_power
-                adjusted_electrolyzer_powers = [power * reduction_factor for power in adjusted_electrolyzer_powers]
-                total_electrolyzer_power = sum(adjusted_electrolyzer_powers)
-        else:
-            total_electrolyzer_power = requested_electrolyzer_power
-            
-            adjusted_battery_power = renewable_power - total_electrolyzer_power
-            
-            if adjusted_battery_power > max_charge:
-                adjusted_battery_power = max_charge
-        
-        power_balance = renewable_power - (total_electrolyzer_power + adjusted_battery_power)
-        
-        if abs(power_balance) > 0.1:
-            adjusted_battery_power += power_balance
-        
-        soc_change = adjusted_battery_power / (battery_capacity * battery_voltage)
+            if requested_electrolyzer_power > 0.0:
+                reduction_factor = (
+                    available_power_for_electrolyzers
+                    / requested_electrolyzer_power
+                )
+                adjusted_electrolyzer_powers = [
+                    power * reduction_factor
+                    for power in adjusted_electrolyzer_powers
+                ]
+
+        total_electrolyzer_power = sum(adjusted_electrolyzer_powers)
+        adjusted_battery_power = (
+            actual_charge_power - actual_discharge_power
+        )
+
+        soc_change = (
+            charge_efficiency * actual_charge_power * time_step_hours
+            - actual_discharge_power * time_step_hours
+            / discharge_efficiency
+        ) / battery_capacity
         new_soc = self.soc + soc_change
-        
-        new_soc = max(min_soc, min(max_soc, new_soc))
+
+        # Physical power limits should already keep SOC feasible. Clipping only
+        # protects against floating-point noise at an exact boundary.
+        new_soc = float(np.clip(new_soc, min_soc, max_soc))
         
         if renewable_power == 0:
             consumption_rate = 1.0
         else:
-            excess_power = max(0, renewable_power - (total_electrolyzer_power + max(0, adjusted_battery_power)))
-            consumed_renewable = renewable_power - excess_power
+            consumed_renewable = min(
+                renewable_power,
+                total_electrolyzer_power + actual_charge_power,
+            )
             consumption_rate = consumed_renewable / renewable_power
         
         hydrogen_produced = 0
@@ -390,11 +444,16 @@ class EnergySystemEnv:
             adjusted_electrolyzer_powers_scalar.append(self._to_scalar(p))
         
         return {
-            'hydrogen_produced': round(hydrogen_produced, 2),
-            'consumption_rate': round(consumption_rate, 2),
-            'new_soc': round(new_soc, 4),
-            'adjusted_battery_power': round(adjusted_battery_power, 2),
-            'adjusted_electrolyzer_powers': [round(p, 2) for p in adjusted_electrolyzer_powers_scalar]
+            'hydrogen_produced': hydrogen_produced,
+            'consumption_rate': consumption_rate,
+            'new_soc': new_soc,
+            'requested_battery_power': battery_power,
+            'requested_charge_power': requested_charge_power,
+            'requested_discharge_power': requested_discharge_power,
+            'actual_charge_power': actual_charge_power,
+            'actual_discharge_power': actual_discharge_power,
+            'adjusted_battery_power': adjusted_battery_power,
+            'adjusted_electrolyzer_powers': adjusted_electrolyzer_powers_scalar,
         }
     
     def _calculate_theoretical_max_hydrogen(self, wind_power, pv_power):

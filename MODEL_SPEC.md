@@ -51,14 +51,14 @@
 |---|---|---:|---|
 | `P_wind,t` | `wind_power` | kW | 第 t 小时风电输出功率 |
 | `P_pv,t` | `pv_power` | kW | 第 t 小时光伏输出功率 |
-| `P_dis,t` | 后续建议新增；当前代码使用 `battery_power < 0` 表示 | kW | 第 t 小时电池实际放电功率，非负 |
+| `P_dis,t` | `actual_discharge_power` | kW | 第 t 小时电池实际放电功率，非负 |
 
 ### 4.2 消纳侧
 
 | 符号 | 代码字段或函数 | 单位 | 含义 |
 |---|---|---:|---|
 | `P_el,i,t` | `electrolyzer_powers[i]` | kW | 第 i 台电解槽第 t 小时实际耗电功率 |
-| `P_ch,t` | 后续建议新增；当前代码使用 `battery_power > 0` 表示 | kW | 第 t 小时电池实际充电功率，非负 |
+| `P_ch,t` | `actual_charge_power` | kW | 第 t 小时电池实际充电功率，非负 |
 | `P_curt,t` | 后续建议新增 | kW | 第 t 小时弃电功率，非负 |
 
 ### 4.3 功率平衡
@@ -77,7 +77,7 @@ P_wind,t + P_pv,t + P_dis,t
 - `P_curt,t >= 0`
 - 同一时间步内电池原则上不应同时充电和放电。
 
-当前代码仍使用 `adjusted_battery_power` 表示电池功率，并以正值表示充电、负值表示放电。该变量只作为当前实现状态记录，后续重构时应拆分为 `actual_charge_power` 和 `actual_discharge_power`。
+电池内部已拆分为 `actual_charge_power` 和 `actual_discharge_power`。为兼容现有训练与结果脚本，`battery_power` 保留为实际净功率，定义为 `P_ch,t - P_dis,t`：正值表示充电，负值表示放电。
 
 ## 5. 主要变量表
 
@@ -90,9 +90,10 @@ P_wind,t + P_pv,t + P_dis,t
 | `P_wind,t` | `wind_power` | kW | 风电输出功率 | 7 月 14 日修正风电公式 |
 | `P_pv,t` | `pv_power` | kW | 调度环境可用光伏功率 | 7 月 15 日改为简化 PVWatts 型模型 |
 | `SOC_t` | `self.soc` / `soc` | 无量纲 | 电池荷电状态 | 当前范围 0.2 到 0.8 |
-| `P_ch,t` | 当前未独立保存 | kW | 电池实际充电功率 | 后续从电池功率拆分 |
-| `P_dis,t` | 当前未独立保存 | kW | 电池实际放电功率 | 后续从电池功率拆分 |
-| `P_bat,t` | `adjusted_battery_power` | kW | 当前代码中的电池净功率 | 正值充电，负值放电，仅为当前实现口径 |
+| `P_ch,t` | `actual_charge_power` | kW | 电池实际充电功率 | 非负，已经供需、SOC、效率和额定功率裁剪 |
+| `P_dis,t` | `actual_discharge_power` | kW | 电池实际放电功率 | 非负，已经供需、SOC、效率和额定功率裁剪 |
+| `P_bat,t^req` | `requested_battery_power` | kW | 电池智能体请求的净功率 | 正值请求充电，负值请求放电 |
+| `P_bat,t` | `actual_battery_power` / `battery_power` | kW | 电池实际净功率 | `P_ch,t - P_dis,t`，`battery_power` 为兼容字段 |
 | `P_el,i,t` | `adjusted_electrolyzer_powers[i]` | kW | 第 i 台电解槽实际功率 | 当前 4 台同一最大/最小功率配置 |
 | `H_t` | `hydrogen_produced` | Nm3 | 第 t 小时制氢量 | 当前由电解槽功率计算 |
 | `H_total` | `total_hydrogen` | Nm3 | episode 累计制氢量 | 测试和评价指标使用 |
@@ -114,12 +115,16 @@ P_wind,t + P_pv,t + P_dis,t
 | 光伏 | 参考辐照度 | 1000 | W/m2 | `pv.reference_irradiance` | NREL PVWatts | 否 |
 | 光伏 | 参考温度 | 25 | degC | `pv.reference_temperature` | NREL PVWatts | 否 |
 | 光伏 | 最大功率温度系数 | -0.0038 | 1/degC | `pv.temperature_coefficient` | NREL/CP-6A20-74097 标准组件代表值 | 是，待具体组件替换 |
-| 电池 | 容量 | 6000 | kWh | `battery.capacity` | 现有配置 | 是 |
-| 电池 | 当前代码电压参数 | 24 | V | `battery.voltage` | 现有配置 | 是 |
-| 电池 | 最大充放电功率 | 6000 | kW | `battery.max_power` | 现有配置 | 是 |
-| 电池 | 最小 SOC | 0.2 | 无量纲 | `battery.min_soc` | 现有配置 | 是 |
-| 电池 | 最大 SOC | 0.8 | 无量纲 | `battery.max_soc` | 现有配置 | 是 |
-| 电池 | 初始 SOC | 0.2 | 无量纲 | `battery.initial_soc` | 现有配置 | 是 |
+| 电池 | 设备型号 | CATL EnerOne 1P，16 柜 | - | `battery.model` | CATL EnerOne 官方资料 | 否 |
+| 电池 | 聚合额定能量 | 5963.2 | kWh | `battery.capacity` | 16 x 372.7 kWh | 否 |
+| 电池 | 单柜额定电压 | 1331.2 | V | `battery.rated_voltage` | CATL EnerOne 官方资料，仅设备说明 | 否 |
+| 电池 | 最大充电功率 | 5963.2 | kW | `battery.max_charge_power` | EnerOne 1P 聚合推算 | 否 |
+| 电池 | 最大放电功率 | 5963.2 | kW | `battery.max_discharge_power` | EnerOne 1P 聚合推算 | 否 |
+| 电池 | 充电效率 | 0.95 | 无量纲 | `battery.charge_efficiency` | 当前系统级建模假设 | 是，可调整 |
+| 电池 | 放电效率 | 0.95 | 无量纲 | `battery.discharge_efficiency` | 当前系统级建模假设 | 是，可调整 |
+| 电池 | 最小 SOC | 0.2 | 无量纲 | `battery.min_soc` | LFP 中间 SOC 窗口建模设定 | 是，可调整 |
+| 电池 | 最大 SOC | 0.8 | 无量纲 | `battery.max_soc` | LFP 中间 SOC 窗口建模设定 | 是，可调整 |
+| 电池 | 初始 SOC | 0.5 | 无量纲 | `battery.initial_soc` | 本项目典型日初始状态设定 | 是，可按实验调整 |
 | 电解槽 | 数量 | 4 | 台 | `electrolyzer.count` | 现有配置 | 是 |
 | 电解槽 | 单台最大功率 | 2500 | kW | `electrolyzer.max_power` | 现有配置 | 是 |
 | 电解槽 | 最小运行功率 | 250 | kW | `electrolyzer.min_power` | 现有配置 | 是 |
@@ -134,7 +139,8 @@ P_wind,t + P_pv,t + P_dis,t
 说明：
 
 - 表中“来源”为“现有配置”的参数，仅说明它们来自当前代码，不代表已经完成物理合理性核对。
-- 电池 `voltage` 参数当前参与 SOC 计算，但电池容量已经以 kWh 表示。后续电池模型修正时需要重点核对，避免容量重复乘以电压。
+- EnerOne 单柜额定电压只用于设备说明。电池容量已以 kWh 表示，SOC 更新不再乘以电压。
+- `charge_efficiency=0.95` 和 `discharge_efficiency=0.95` 不是 CATL 公开的 EnerOne 专属参数，而是当前可调整的系统级建模假设，往返效率为 90.25%。后续可根据 PCS 型号或实测数据替换。
 - 电解槽 `recommended_power=150 kW` 小于 `min_power=250 kW`，当前含义不清，需要后续删除或重新解释。
 - 制氢系数和固定项的单位口径当前不明确，后续应根据电解槽功率-制氢量模型统一核对。
 
@@ -257,17 +263,51 @@ $$
 | 全年 8760 条天气记录无异常和越界 | 完成 | `test_pv_power_handles_all_annual_weather_records` |
 | 负值、NaN 和 Inf 输入显式报错 | 完成 | 光伏异常输入测试 |
 
-## 9. 当前实现与后续修正提醒
+## 9. 电池模型（2026-07-16）
+
+### 9.1 设备口径
+
+当前电池原型为 16 柜 CATL EnerOne 1P 户外液冷 LFP 储能系统。单柜额定能量为 372.7 kWh，聚合额定能量为 5963.2 kWh。1P 口径下，最大充电和放电功率均取 5963.2 kW。产品信息来自 [CATL EnerOne 官方介绍](https://www.catl.com/en/news/935.html) 和 [CATL 储能产品手册](https://www.catl.com/en/uploads/1/file/public/202303/20230315092000_ahw9vpn63j.pdf)。
+
+### 9.2 SOC 状态方程
+
+时间步长 `Delta_t = 1 h`。充电和放电功率均定义在系统母线侧，SOC 更新为：
+
+```text
+SOC_(t+1) = SOC_t
+            + eta_ch * P_ch,t * Delta_t / E_bat
+            - P_dis,t * Delta_t / (eta_dis * E_bat)
+```
+
+当前 `eta_ch = eta_dis = 0.95`，是可调整的建模假设。额定电压不参与该能量方程。
+
+### 9.3 请求动作与实际执行
+
+电池动作范围为 `[-1, 1]`：正值请求充电，负值请求放电。实际充电功率取请求功率、当前风光富余、额定充电功率和 SOC 剩余空间四者的最小值。实际放电功率取请求功率、当前功率缺额、额定放电功率和 SOC 可用能量四者的最小值。
+
+当请求方向与供需方向冲突时，实际电池功率为 0。零动作不得被后续功率平衡代码改写。`clip` 仅作为浮点边界误差的最后保护，不用来掩盖过大的充放电功率。
+
+### 9.4 完成标准自检
+
+| 检查项 | 状态 | 验证方式 |
+|---|---|---|
+| 容量不再重复乘以电压 | 完成 | SOC 充放电手算测试 |
+| 充放电效率进入 SOC 方程 | 完成 | `test_one_hour_charge_matches_soc_equation` 和放电对应测试 |
+| 动作能够改变下一时刻 SOC | 完成 | 电池动作、充电和放电测试 |
+| SOC 上下限与功率上限生效 | 完成 | 边界与剩余容量裁剪测试 |
+| 请求功率和实际功率分别保存 | 完成 | `step()` 输出和历史记录测试 |
+
+## 10. 当前实现与后续修正提醒
 
 7 月 13 日仅建立统一说明，不修改代码。根据当前代码状态，后续需要依次处理以下问题：
 
 - 风电模型：已于 7 月 14 日改为分段三次功率曲线，输入为 m/s，输出统一为 kW。
 - 光伏模型：已于 7 月 15 日改为简化 PVWatts 型功率模型；环境温度替代组件温度以及光强口径仍需在后续核对。
-- 电池模型：当前 SOC 更新中存在容量再乘电压的问题，7 月 16 日修正。
+- 电池模型：已于 7 月 16 日口径下修正 SOC、效率、动作裁剪和请求/实际功率记录；0.95 的充放电效率后续可按 PCS 或实测数据调整。
 - 功率平衡：当前用 `adjusted_battery_power` 兜底平衡，后续需要显式保存弃电和功率平衡残差。
 - 电解槽模型：当前 4 台电解槽共用一组功率上下限，后续改为 2 台碱性和 2 台 PEM 的逐台配置。
 
-## 10. 7 月 13 日完成标准自检
+## 11. 7 月 13 日完成标准自检
 
 | 检查项 | 状态 | 说明 |
 |---|---|---|

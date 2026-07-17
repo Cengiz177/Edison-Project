@@ -110,7 +110,7 @@
 
 完成标准：电池动作能够改变下一状态；所有单位一致。
 
-- [ ] 当日完成
+- [x] 当日完成
 
 ### 7 月 17 日（周五）：验证电池并设计功率平衡
 
@@ -709,6 +709,7 @@
 | 2026-07-13 |  |  |  |  |  |
 | 2026-07-14 | 完成风电分段三次功率模型，统一输出单位为 kW；补充边界、单调性和额定功率约束测试；生成 0—30 m/s 曲线 | `environment.py`、`MODEL_SPEC.md`、`tests/test_wind_power.py`、`scripts/plot_wind_power_curve.py`、`results/wind_power_curve.png` | `python -m pytest -q`：3 项全部通过；曲线图目视检查通过 | 风机参数仍来自原配置，尚未完成设备级来源核对 | 按 7 月 15 日计划修正光伏模型 |
 | 2026-07-17（补做 7 月 15 日任务） | 完成简化 PVWatts 型光伏模型；统一辐照度、温度系数和调度功率上限口径；补充全年数据与异常输入测试 | `config.py`、`environment.py`、`MODEL_SPEC.md`、`tests/test_pv_power.py` | `python -m pytest -q`：20 项全部通过，其中光伏专项 17 项；全年 8760 条天气记录通过 | 环境温度暂代组件温度；CSV 光强的 GHI/POA 口径和具体组件参数仍待核对 | 回补 7 月 16 日电池模型任务 |
+| 2026-07-17（补做 7 月 16 日任务） | 选定 16 柜 CATL EnerOne 1P 电池原型；修正 SOC 能量方程；引入 0.95 充放电效率；实现供需、SOC 和额定功率裁剪；分别记录请求与实际电池功率 | `config.py`、`environment.py`、`MODEL_SPEC.md`、`tests/test_battery_model.py` | `python -m pytest -q`：33 项全部通过，其中电池专项 13 项 | 0.95 效率是可调整的系统级建模假设；显式弃电和完整功率平衡待后续任务 | 继续验证电池并设计功率平衡 |
 
 ## 12. 版本与实验记录
 
