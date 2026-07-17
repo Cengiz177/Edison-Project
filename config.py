@@ -28,9 +28,10 @@ class Config:
         
         # 光伏参数
         'pv': {
-            'rated_power': 5000,  # 额定功率(kW)
-            'standard_temp': 25,  # 标准温度(℃)
-            'voltage': 250,       # 电压(V)
+            'rated_power': 5000,              # 调度环境最大可用功率(kW)
+            'reference_irradiance': 1000,     # 参考辐照度(W/m^2)
+            'reference_temperature': 25,      # 参考组件温度(℃)
+            'temperature_coefficient': -0.0038,  # 最大功率温度系数(1/℃)
         },
         
         # 储能参数

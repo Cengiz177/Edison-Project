@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from config import Config
-import math
 
 class EnergySystemEnv:
     def __init__(self, mode='train'):
@@ -254,27 +253,38 @@ class EnergySystemEnv:
         return float(rated_power)
     
     def _calculate_pv_power(self, temperature, light_intensity):
+        """Return dispatch-available PV power in kW.
+
+        The model follows the basic PVWatts irradiance and temperature
+        correction form. Ambient temperature is used as a documented proxy
+        for cell temperature, and ``light_intensity`` is treated as effective
+        irradiance in W/m2.
+        """
         params = self.physical_params['pv']
-        
+
+        temperature = self._to_scalar(temperature)
+        light_intensity = self._to_scalar(light_intensity)
+
+        if not np.isfinite(temperature):
+            raise ValueError(f"PV temperature must be finite, got {temperature}")
+        if not np.isfinite(light_intensity):
+            raise ValueError(
+                f"PV effective irradiance must be finite, got {light_intensity}"
+            )
+        if light_intensity < 0:
+            raise ValueError(
+                f"PV effective irradiance must be non-negative, got {light_intensity}"
+            )
         if light_intensity == 0:
-            return 0
-        
-        temp_diff = temperature - params['standard_temp']
-        relative_irradiance = light_intensity / 1000 - 1
-        
-        voc_temp_coef = 15.3 * (light_intensity / 1000) * (1 + 0.025 * temp_diff)
-        isc_temp_coef = 14.3 * (light_intensity / 1000) * (1 + 0.025 * temp_diff)
-        
-        ff_numer = 280 * (1 - 0.00288 * temp_diff) * math.log(math.e + 0.5 * relative_irradiance)
-        ff_denom = 360 * (1 - 0.00288 * temp_diff) * math.log(math.e + 0.5 * relative_irradiance)
-        
-        gamma = (ff_numer / ff_denom - 1) * (math.log(1 - isc_temp_coef / voc_temp_coef))**(-1)
-        beta = (1 - isc_temp_coef / voc_temp_coef) * math.exp(-ff_numer / ff_denom / gamma)
-        
-        output_power = voc_temp_coef * (1 - beta * (math.exp(params['voltage'] / gamma / ff_denom) - 1))
-        pv_power = round(output_power * params['voltage'] * 80)
-        
-        return min(max(pv_power, 0), params['rated_power'])
+            return 0.0
+
+        temperature_factor = 1.0 + params['temperature_coefficient'] * (
+            temperature - params['reference_temperature']
+        )
+        irradiance_ratio = light_intensity / params['reference_irradiance']
+        raw_power = params['rated_power'] * irradiance_ratio * temperature_factor
+
+        return float(np.clip(raw_power, 0.0, params['rated_power']))
     
     def _scale_battery_action(self, action):
         max_power = self.physical_params['battery']['max_power']

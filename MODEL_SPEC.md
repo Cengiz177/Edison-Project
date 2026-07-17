@@ -1,6 +1,6 @@
 # 风光储氢系统统一模型说明
 
-> 版本：2026-07-13 初稿  
+> 版本：2026-07-15 光伏模型修订
 > 目的：统一系统边界、变量、单位、功率流约定和现有参数口径，为后续物理模型修正、规则策略、MILP 和 SAC 实验提供共同定义。
 
 ## 1. 研究场景与系统边界
@@ -85,10 +85,10 @@ P_wind,t + P_pv,t + P_dis,t
 |---|---|---:|---|---|
 | `t` | `time_step` / `hour_idx` | h | 当前时间步或小时索引 | 一个 episode 共 24 步 |
 | `v_t` | `wind_speed` | m/s | 第 t 小时风速 | 来自天气数据 |
-| `G_t` | `light_intensity` | W/m2 | 第 t 小时光照强度 | 来自天气数据 |
-| `T_t` | `temperature` | degC | 第 t 小时环境温度 | 当前作为光伏模型温度输入 |
+| `G_t` | `light_intensity` | W/m2 | 第 t 小时有效辐照度 | CSV“光强”暂按有效辐照度使用，真实 GHI/POA 口径待核对 |
+| `T_t` | `temperature` | degC | 第 t 小时环境温度 | 光伏模型中暂代组件温度 |
 | `P_wind,t` | `wind_power` | kW | 风电输出功率 | 7 月 14 日修正风电公式 |
-| `P_pv,t` | `pv_power` | kW | 光伏输出功率 | 7 月 15 日修正光伏公式 |
+| `P_pv,t` | `pv_power` | kW | 调度环境可用光伏功率 | 7 月 15 日改为简化 PVWatts 型模型 |
 | `SOC_t` | `self.soc` / `soc` | 无量纲 | 电池荷电状态 | 当前范围 0.2 到 0.8 |
 | `P_ch,t` | 当前未独立保存 | kW | 电池实际充电功率 | 后续从电池功率拆分 |
 | `P_dis,t` | 当前未独立保存 | kW | 电池实际放电功率 | 后续从电池功率拆分 |
@@ -111,8 +111,9 @@ P_wind,t + P_pv,t + P_dis,t
 | 风机 | 叶片半径 | 68 | m | `wind_turbine.blade_radius` | 现有配置 | 是 |
 | 风机 | 空气密度 | 1.205 | kg/m3 | `wind_turbine.air_density` | 现有配置 | 是 |
 | 光伏 | 额定功率 | 5000 | kW | `pv.rated_power` | 现有配置 | 是 |
-| 光伏 | 标准温度 | 25 | degC | `pv.standard_temp` | 现有配置 | 是 |
-| 光伏 | 电压 | 250 | V | `pv.voltage` | 现有配置 | 是 |
+| 光伏 | 参考辐照度 | 1000 | W/m2 | `pv.reference_irradiance` | NREL PVWatts | 否 |
+| 光伏 | 参考温度 | 25 | degC | `pv.reference_temperature` | NREL PVWatts | 否 |
+| 光伏 | 最大功率温度系数 | -0.0038 | 1/degC | `pv.temperature_coefficient` | NREL/CP-6A20-74097 标准组件代表值 | 是，待具体组件替换 |
 | 电池 | 容量 | 6000 | kWh | `battery.capacity` | 现有配置 | 是 |
 | 电池 | 当前代码电压参数 | 24 | V | `battery.voltage` | 现有配置 | 是 |
 | 电池 | 最大充放电功率 | 6000 | kW | `battery.max_power` | 现有配置 | 是 |
@@ -180,17 +181,93 @@ $$
 | 切入、额定、切出及切出后边界正确 | 完成 | `test_wind_power_boundary_values` |
 | 生成 0–30 m/s 功率曲线图 | 完成 | `results/wind_power_curve.png` |
 
-## 8. 当前实现与后续修正提醒
+## 8. 光伏发电模型（2026-07-15）
+
+### 8.1 功率方程
+
+光伏模型采用 NREL PVWatts 最大功率温度系数模型的简化形式。环境温度输入 `T_a,t` 的单位为 degC，有效辐照度输入 `G_t` 的单位为 W/m2，输出 `P_pv,t` 的单位为 kW：
+
+$$
+P_{\text{pv},t}^{\text{raw}}
+= P_{\text{pv,r}}
+\frac{G_t}{G_{\text{ref}}}
+\left[1+\gamma_P(T_{a,t}-T_{\text{ref}})\right]
+$$
+
+$$
+P_{\text{pv},t}
+= \min\left(\max\left(P_{\text{pv},t}^{\text{raw}},0\right),P_{\text{pv,r}}\right)
+$$
+
+参数为：
+
+- `P_pv,r = 5000 kW`：调度环境中的最大可用光伏功率。
+- `G_ref = 1000 W/m2`：参考辐照度。
+- `T_ref = 25 degC`：参考组件温度。
+- `gamma_P = -0.0038 1/degC`：现代标准晶硅组件最大功率温度系数代表值。
+
+基础方程参考 NREL《[PVWatts Version 5 Manual](https://docs.nrel.gov/docs/fy14osti/62641.pdf)》中的最大功率温度修正模型；温度系数采用 NREL/CP-6A20-74097《[Improvements to PVWatts for Fixed and One-Axis Tracking Systems](https://docs.nrel.gov/docs/fy19osti/74097.pdf)》给出的现代标准组件代表值 `-0.38 %/degC`。
+
+### 8.2 建模口径与简化假设
+
+1. PVWatts 原模型使用组件或电池片温度。当前数据仅提供环境温度，因此暂令 `T_cell,t ≈ T_a,t`。该假设通常低估白天组件升温，可能高估高辐照时段的光伏出力。
+2. CSV 第三列仅标记为“光强”，当前直接作为有效辐照度 `G_t` 输入。其真实含义是水平面总辐照度 GHI、组件平面辐照度 POA，还是已经修正的有效辐照度，仍待核对。
+3. `5000 kW` 定义为调度环境的最大可用光伏功率，不进一步区分 DC 铭牌容量、逆变器 AC 容量和并网侧净功率。
+4. 当前不考虑组件倾角和方位角、入射角、光谱、遮挡、积灰、线路损失、逆变器效率、DC/AC 容量比及组件老化。
+5. 当前模型服务于 1 h 时间步的风光储氢调度，不是完整 PVWatts、组件 I-V 模型或经过实测标定的电站模型。
+
+### 8.3 边界与异常输入
+
+- `G_t = 0` 时输出为 `0 kW`。
+- `G_t < 0` 时抛出 `ValueError`，不静默修正无效天气数据。
+- 温度或辐照度为 NaN、正无穷或负无穷时抛出 `ValueError`。
+- 所有有效输入均满足 `0 <= P_pv,t <= 5000 kW`。
+- 在温度固定时，输出随辐照度非递减；达到 5000 kW 后保持功率上限。
+- 在未触及功率上下限时，由于 `gamma_P < 0`，相同辐照度下温度升高会使输出降低。
+
+### 8.4 输入—输出检查表
+
+在 `T_a = 25 degC` 时，温度修正因子为 1：
+
+| 环境温度 | 有效辐照度 | 预期输出 |
+|---:|---:|---:|
+| 25 degC | 0 W/m2 | 0 kW |
+| 25 degC | 200 W/m2 | 1000 kW |
+| 25 degC | 500 W/m2 | 2500 kW |
+| 25 degC | 1000 W/m2 | 5000 kW |
+| 25 degC | 1200 W/m2 | 5000 kW（达到调度功率上限） |
+
+在 `G_t = 500 W/m2` 时：
+
+| 环境温度 | 温度修正因子 | 预期输出 |
+|---:|---:|---:|
+| -20 degC | 1.171 | 2927.5 kW |
+| 0 degC | 1.095 | 2737.5 kW |
+| 25 degC | 1.000 | 2500.0 kW |
+| 40 degC | 0.943 | 2357.5 kW |
+
+### 8.5 完成标准自检
+
+| 检查项 | 状态 | 验证方式 |
+|---|---|---|
+| 功率方程、参数、单位和来源完整 | 完成 | 见 8.1 节 |
+| 环境温度与有效辐照度简化口径已记录 | 完成 | 见 8.2 节 |
+| 夜间输出为 0，输出位于额定范围 | 完成 | `test_pv_power_reference_points`、`test_pv_power_stays_bounded_over_project_weather_range` |
+| 相同温度下随辐照度非递减 | 完成 | `test_pv_power_is_non_decreasing_with_irradiance` |
+| 全年 8760 条天气记录无异常和越界 | 完成 | `test_pv_power_handles_all_annual_weather_records` |
+| 负值、NaN 和 Inf 输入显式报错 | 完成 | 光伏异常输入测试 |
+
+## 9. 当前实现与后续修正提醒
 
 7 月 13 日仅建立统一说明，不修改代码。根据当前代码状态，后续需要依次处理以下问题：
 
 - 风电模型：已于 7 月 14 日改为分段三次功率曲线，输入为 m/s，输出统一为 kW。
-- 光伏模型：当前 `_calculate_pv_power()` 公式复杂且参数来源不清，7 月 15 日改为可解释的简化模型。
+- 光伏模型：已于 7 月 15 日改为简化 PVWatts 型功率模型；环境温度替代组件温度以及光强口径仍需在后续核对。
 - 电池模型：当前 SOC 更新中存在容量再乘电压的问题，7 月 16 日修正。
 - 功率平衡：当前用 `adjusted_battery_power` 兜底平衡，后续需要显式保存弃电和功率平衡残差。
 - 电解槽模型：当前 4 台电解槽共用一组功率上下限，后续改为 2 台碱性和 2 台 PEM 的逐台配置。
 
-## 9. 7 月 13 日完成标准自检
+## 10. 7 月 13 日完成标准自检
 
 | 检查项 | 状态 | 说明 |
 |---|---|---|
