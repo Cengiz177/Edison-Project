@@ -45,8 +45,10 @@ class Config:
             # 当前为系统级建模假设，后续可根据PCS/实测数据调整。
             'charge_efficiency': 0.95,
             'discharge_efficiency': 0.95,
-            'min_soc': 0.2,                  # 最小SOC
-            'max_soc': 0.8,                  # 最大SOC
+            'min_soc': 0.0,                  # 物理最小SOC
+            'max_soc': 1.0,                  # 物理最大SOC
+            'recommended_min_soc': 0.2,      # 推荐运行区间下限
+            'recommended_max_soc': 0.8,      # 推荐运行区间上限
             'initial_soc': 0.5,              # 初始SOC
         },
         

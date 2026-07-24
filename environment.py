@@ -83,6 +83,19 @@ class EnergySystemEnv:
         self.requested_battery_power_history = []
         self.battery_power_history = []
         self.electrolyzer_power_history = [[] for _ in range(4)]
+        self.renewable_power_history = []
+        self.actual_charge_power_history = []
+        self.actual_discharge_power_history = []
+        self.actual_electrolyzer_power_history = []
+        self.curtailment_power_history = []
+        self.requested_power_deficit_history = []
+        self.power_balance_residual_history = []
+        self.total_renewable_energy = 0.0
+        self.total_charge_energy = 0.0
+        self.total_discharge_energy = 0.0
+        self.total_electrolyzer_energy = 0.0
+        self.total_curtailment_energy = 0.0
+        self.total_requested_power_deficit_energy = 0.0
         self.current_theoretical_max_hydrogen = 0
         
         self.last_battery_state = 0
@@ -116,6 +129,12 @@ class EnergySystemEnv:
         requested_discharge_power = result['requested_discharge_power']
         actual_charge_power = result['actual_charge_power']
         actual_discharge_power = result['actual_discharge_power']
+        renewable_power = result['renewable_power']
+        requested_electrolyzer_power = result['requested_electrolyzer_power']
+        actual_electrolyzer_power = result['actual_electrolyzer_power']
+        requested_power_deficit = result['requested_power_deficit']
+        curtailment_power = result['curtailment_power']
+        power_balance_residual = result['power_balance_residual']
         adjusted_electrolyzer_powers = result['adjusted_electrolyzer_powers']
         adjusted_battery_power = self._to_scalar(adjusted_battery_power)
         
@@ -139,6 +158,25 @@ class EnergySystemEnv:
         self.battery_power_history.append(adjusted_battery_power)
         for i, p in enumerate(adjusted_electrolyzer_powers):
             self.electrolyzer_power_history[i].append(p)
+        self.renewable_power_history.append(renewable_power)
+        self.actual_charge_power_history.append(actual_charge_power)
+        self.actual_discharge_power_history.append(actual_discharge_power)
+        self.actual_electrolyzer_power_history.append(actual_electrolyzer_power)
+        self.curtailment_power_history.append(curtailment_power)
+        self.requested_power_deficit_history.append(requested_power_deficit)
+        self.power_balance_residual_history.append(power_balance_residual)
+
+        time_step_hours = 1.0
+        self.total_renewable_energy += renewable_power * time_step_hours
+        self.total_charge_energy += actual_charge_power * time_step_hours
+        self.total_discharge_energy += actual_discharge_power * time_step_hours
+        self.total_electrolyzer_energy += (
+            actual_electrolyzer_power * time_step_hours
+        )
+        self.total_curtailment_energy += curtailment_power * time_step_hours
+        self.total_requested_power_deficit_energy += (
+            requested_power_deficit * time_step_hours
+        )
         
         reward = self._calculate_reward(
             hydrogen_produced, consumption_rate, new_switches,
@@ -157,6 +195,7 @@ class EnergySystemEnv:
         info = {
             'wind_power': wind_power,
             'pv_power': pv_power,
+            'renewable_power': renewable_power,
             'requested_battery_power': battery_power,
             'requested_charge_power': requested_charge_power,
             'requested_discharge_power': requested_discharge_power,
@@ -164,13 +203,26 @@ class EnergySystemEnv:
             'actual_discharge_power': actual_discharge_power,
             'actual_battery_power': adjusted_battery_power,
             'battery_power': adjusted_battery_power,
+            'requested_electrolyzer_power': requested_electrolyzer_power,
+            'actual_electrolyzer_power': actual_electrolyzer_power,
             'electrolyzer_powers': adjusted_electrolyzer_powers,
+            'requested_power_deficit': requested_power_deficit,
+            'curtailment_power': curtailment_power,
+            'power_balance_residual': power_balance_residual,
             'hydrogen_produced': hydrogen_produced,
             'consumption_rate': consumption_rate,
             'soc': self.soc,
             'switch_count': new_switches,
             'total_switches': self.switch_count,
             'total_hydrogen': self.total_hydrogen,
+            'total_renewable_energy': self.total_renewable_energy,
+            'total_charge_energy': self.total_charge_energy,
+            'total_discharge_energy': self.total_discharge_energy,
+            'total_electrolyzer_energy': self.total_electrolyzer_energy,
+            'total_curtailment_energy': self.total_curtailment_energy,
+            'total_requested_power_deficit_energy': (
+                self.total_requested_power_deficit_energy
+            ),
             'theoretical_max_hydrogen': self.current_theoretical_max_hydrogen
         }
         
@@ -398,7 +450,27 @@ class EnergySystemEnv:
                     for power in adjusted_electrolyzer_powers
                 ]
 
-        total_electrolyzer_power = sum(adjusted_electrolyzer_powers)
+        actual_electrolyzer_power = sum(adjusted_electrolyzer_powers)
+        requested_power_deficit = max(
+            0.0,
+            requested_electrolyzer_power
+            - renewable_power
+            - actual_discharge_power,
+        )
+        curtailment_power = max(
+            0.0,
+            renewable_power
+            + actual_discharge_power
+            - actual_electrolyzer_power
+            - actual_charge_power,
+        )
+        power_balance_residual = (
+            renewable_power
+            + actual_discharge_power
+            - actual_electrolyzer_power
+            - actual_charge_power
+            - curtailment_power
+        )
         adjusted_battery_power = (
             actual_charge_power - actual_discharge_power
         )
@@ -419,7 +491,7 @@ class EnergySystemEnv:
         else:
             consumed_renewable = min(
                 renewable_power,
-                total_electrolyzer_power + actual_charge_power,
+                actual_electrolyzer_power + actual_charge_power,
             )
             consumption_rate = consumed_renewable / renewable_power
         
@@ -452,6 +524,12 @@ class EnergySystemEnv:
             'requested_discharge_power': requested_discharge_power,
             'actual_charge_power': actual_charge_power,
             'actual_discharge_power': actual_discharge_power,
+            'renewable_power': renewable_power,
+            'requested_electrolyzer_power': requested_electrolyzer_power,
+            'actual_electrolyzer_power': actual_electrolyzer_power,
+            'requested_power_deficit': requested_power_deficit,
+            'curtailment_power': curtailment_power,
+            'power_balance_residual': power_balance_residual,
             'adjusted_battery_power': adjusted_battery_power,
             'adjusted_electrolyzer_powers': adjusted_electrolyzer_powers_scalar,
         }

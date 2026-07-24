@@ -59,7 +59,7 @@
 |---|---|---:|---|
 | `P_el,i,t` | `electrolyzer_powers[i]` | kW | 第 i 台电解槽第 t 小时实际耗电功率 |
 | `P_ch,t` | `actual_charge_power` | kW | 第 t 小时电池实际充电功率，非负 |
-| `P_curt,t` | 后续建议新增 | kW | 第 t 小时弃电功率，非负 |
+| `P_curt,t` | `curtailment_power` | kW | 第 t 小时弃电功率，非负 |
 
 ### 4.3 功率平衡
 
@@ -79,9 +79,9 @@ P_wind,t + P_pv,t + P_dis,t
 
 电池内部已拆分为 `actual_charge_power` 和 `actual_discharge_power`。为兼容现有训练与结果脚本，`battery_power` 保留为实际净功率，定义为 `P_ch,t - P_dis,t`：正值表示充电，负值表示放电。
 
-#### 4.3.1 7 月 17 日冻结的目标定义
+#### 4.3.1 7 月 17 日冻结、7 月 20 日实现的定义
 
-> **状态说明：**本节于 2026-07-17 完成设计冻结，不表示相关字段已在代码中实现。`requested_power_deficit`、`curtailment_power` 和 `power_balance_residual` 计划于 2026-07-20 实现。
+> **状态说明：**本节于 2026-07-17 完成设计冻结；`requested_power_deficit`、`curtailment_power` 和 `power_balance_residual` 已按该定义于 2026-07-20 任务中实现。
 
 ```text
 renewable_power
@@ -119,8 +119,19 @@ power_balance_residual
 | 层级 | 目标字段 | 含义 | 实现日期 |
 |---|---|---|---|
 | 策略请求 | `battery_action`、`requested_charge_power`、`requested_discharge_power`、`requested_electrolyzer_powers` | 保留策略原始意图，不保证可执行 | 电池部分已实现；统一接口 2026-07-23 |
-| 物理约束 | `renewable_power`、SOC 可充放功率、额定功率、富余、缺额 | 记录请求被裁剪的物理原因 | 功率平衡 2026-07-20；统一输出 2026-07-23 |
-| 实际执行 | `actual_charge_power`、`actual_discharge_power`、`actual_electrolyzer_powers`、`curtailment_power`、`requested_power_deficit`、`power_balance_residual`、`new_soc` | 表示真正进入状态转移和指标统计的结果 | 电池部分已实现；其余 2026-07-20 和 2026-07-23 |
+| 物理约束 | `renewable_power`、SOC 可充放功率、额定功率、富余、缺额 | 记录请求被裁剪的物理原因 | 功率平衡字段已实现；统一分层输出 2026-07-23 |
+| 实际执行 | `actual_charge_power`、`actual_discharge_power`、`actual_electrolyzer_powers`、`curtailment_power`、`requested_power_deficit`、`power_balance_residual`、`new_soc` | 表示真正进入状态转移和指标统计的结果 | 已实现；统一分层输出 2026-07-23 |
+
+### 4.5 逐时历史与 episode 能源统计
+
+环境按 1 小时时间步保存风光、充电、放电、电解槽、弃电、请求缺额和功率平衡残差历史，并累计对应能量。功率单位为 kW，累计能量单位为 kWh。全天统计满足：
+
+```text
+total_renewable_energy + total_discharge_energy
+= total_electrolyzer_energy + total_charge_energy + total_curtailment_energy
+```
+
+`total_requested_power_deficit_energy` 是未满足请求的诊断累计量，不进入实际母线能量守恒方程。
 
 ## 5. 主要变量表
 
@@ -132,7 +143,7 @@ power_balance_residual
 | `T_t` | `temperature` | degC | 第 t 小时环境温度 | 光伏模型中暂代组件温度 |
 | `P_wind,t` | `wind_power` | kW | 风电输出功率 | 7 月 14 日修正风电公式 |
 | `P_pv,t` | `pv_power` | kW | 调度环境可用光伏功率 | 7 月 15 日改为简化 PVWatts 型模型 |
-| `SOC_t` | `self.soc` / `soc` | 无量纲 | 电池荷电状态 | 当前范围 0.2 到 0.8 |
+| `SOC_t` | `self.soc` / `soc` | 无量纲 | 电池荷电状态 | 物理范围 0 到 1，推荐范围 0.2 到 0.8 |
 | `P_ch,t` | `actual_charge_power` | kW | 电池实际充电功率 | 非负，已经供需、SOC、效率和额定功率裁剪 |
 | `P_dis,t` | `actual_discharge_power` | kW | 电池实际放电功率 | 非负，已经供需、SOC、效率和额定功率裁剪 |
 | `P_bat,t^req` | `requested_battery_power` | kW | 电池智能体请求的净功率 | 正值请求充电，负值请求放电 |
@@ -141,7 +152,7 @@ power_balance_residual
 | `H_t` | `hydrogen_produced` | Nm3 | 第 t 小时制氢量 | 当前由电解槽功率计算 |
 | `H_total` | `total_hydrogen` | Nm3 | episode 累计制氢量 | 测试和评价指标使用 |
 | `eta_consume,t` | `consumption_rate` | 无量纲 | 第 t 小时新能源消纳率 | 当前代码按逐小时比例计算 |
-| `P_curt,t` | 当前未独立保存 | kW | 弃电功率 | 后续功率平衡重构中新增 |
+| `P_curt,t` | `curtailment_power` | kW | 弃电功率 | 已独立保存并累计为弃电量 |
 | `N_switch` | `switch_count` / `total_switches` | 次 | 电池或设备切换次数 | 当前主要统计电池充放电方向切换 |
 
 ## 6. 参数核对表
@@ -165,8 +176,10 @@ power_balance_residual
 | 电池 | 最大放电功率 | 5963.2 | kW | `battery.max_discharge_power` | EnerOne 1P 聚合推算 | 否 |
 | 电池 | 充电效率 | 0.95 | 无量纲 | `battery.charge_efficiency` | 当前系统级建模假设 | 是，可调整 |
 | 电池 | 放电效率 | 0.95 | 无量纲 | `battery.discharge_efficiency` | 当前系统级建模假设 | 是，可调整 |
-| 电池 | 最小 SOC | 0.2 | 无量纲 | `battery.min_soc` | LFP 中间 SOC 窗口建模设定 | 是，可调整 |
-| 电池 | 最大 SOC | 0.8 | 无量纲 | `battery.max_soc` | LFP 中间 SOC 窗口建模设定 | 是，可调整 |
+| 电池 | 物理最小 SOC | 0.0 | 无量纲 | `battery.min_soc` | SOC 定义边界 | 否 |
+| 电池 | 物理最大 SOC | 1.0 | 无量纲 | `battery.max_soc` | SOC 定义边界 | 否 |
+| 电池 | 推荐 SOC 下限 | 0.2 | 无量纲 | `battery.recommended_min_soc` | LFP 推荐运行窗口建模设定 | 是，可调整 |
+| 电池 | 推荐 SOC 上限 | 0.8 | 无量纲 | `battery.recommended_max_soc` | LFP 推荐运行窗口建模设定 | 是，可调整 |
 | 电池 | 初始 SOC | 0.5 | 无量纲 | `battery.initial_soc` | 本项目典型日初始状态设定 | 是，可按实验调整 |
 | 电解槽 | 数量 | 4 | 台 | `electrolyzer.count` | 现有配置 | 是 |
 | 电解槽 | 单台最大功率 | 2500 | kW | `electrolyzer.max_power` | 现有配置 | 是 |
@@ -349,14 +362,14 @@ SOC_(t+1) = SOC_t
 | 当日状态 | 内容 |
 |---|---|
 | 已完成 | 电池测试结果核对、1 小时 SOC 手算、功率平衡公式、三层数据结构、四个人工场景预期表、SOC 双层边界设计 |
-| 尚未实现 | 显式弃电、请求功率缺额、功率平衡残差、SOC 双层边界、推荐区间惩罚 |
+| 截至 7 月 17 日尚未实现 | 显式弃电、请求功率缺额、功率平衡残差、SOC 双层边界、推荐区间惩罚 |
 | 后续日期 | 2026-07-20 实现功率平衡和物理 SOC 边界；2026-07-23 统一接口和诊断指标；2026-08-12 实现 SOC 推荐区间惩罚 |
 
 因此，7 月 17 日任务勾选“完成”只表示上述验证和设计交付物已冻结，不表示设计中的所有字段均已进入代码。
 
 ### 10.2 电池测试与 1 小时手算核对
 
-当前完整测试集为 33 项，全部通过，其中电池专项 13 项。电池专项已覆盖充电、放电、当前 SOC 上下限、剩余容量功率裁剪、动作方向和请求/实际功率记录。
+截至 2026-07-17，完整测试集为 33 项，全部通过，其中电池专项 13 项。电池专项已覆盖充电、放电、当时的 SOC 上下限、剩余容量功率裁剪、动作方向和请求/实际功率记录。完成 7 月 20 日任务后，测试集增至 39 项，新增物理 SOC 双层边界、四个人工功率场景和 24 小时能源统计验证。
 
 | 场景 | 手算公式 | 预期 SOC | 测试结果 |
 |---|---|---:|---|
@@ -365,7 +378,7 @@ SOC_(t+1) = SOC_t
 
 ### 10.3 人工功率平衡场景预期表
 
-> **注意：**下表是 2026-07-17 冻结的目标行为，将于 2026-07-20 转为自动化测试；不宣称当前代码已输出表中所有字段。
+> **实现状态：**下表于 2026-07-17 冻结，并已在 2026-07-20 任务中转为自动化测试；当前代码已输出表中功率平衡字段。
 
 | 场景 | 风光功率 | 电解槽请求 | 电池请求 / SOC | 目标执行结果 |
 |---|---:|---:|---|---|
@@ -376,9 +389,9 @@ SOC_(t+1) = SOC_t
 
 四个目标场景的 `power_balance_residual` 均应在浮点容差内等于 0。
 
-### 10.4 SOC 双层边界：已冻结、未实现
+### 10.4 SOC 双层边界：执行边界已实现
 
-未来将 SOC 边界拆分为物理硬边界 `[0, 1]` 和推荐运行区间 `[0.2, 0.8]`，初始 SOC 保持 0.5。执行层只禁止超出物理硬边界；推荐区间外的运行由奖励函数引导。
+SOC 边界已拆分为物理硬边界 `[0, 1]` 和推荐运行区间 `[0.2, 0.8]`，初始 SOC 保持 0.5。执行层只禁止超出物理硬边界；推荐区间已进入配置，但尚未进入奖励函数。
 
 ```text
 d_low  = max(0, (0.2 - SOC) / 0.2)
@@ -386,7 +399,7 @@ d_high = max(0, (SOC - 0.8) / 0.2)
 soc_penalty = w_soc * (d_low^2 + d_high^2)
 ```
 
-`w_soc` 不在 7 月 17 日确定，而是在 2026-08-12 奖励函数重构时与制氢、弃电、切换和波动分量统一标定。在 2026-07-20 实现物理硬边界之前，当前代码仍保持 `[0.2, 0.8]` 的保守裁剪。
+`w_soc` 不在 7 月 17 日确定，而是在 2026-08-12 奖励函数重构时与制氢、弃电、切换和波动分量统一标定。当前执行层已使用 `[0, 1]`，允许 SOC 在物理可行时进入推荐区间之外。
 
 ### 10.5 后续实施时间表
 
@@ -406,7 +419,7 @@ soc_penalty = w_soc * (d_low^2 + d_high^2)
 - 风电模型：已于 7 月 14 日改为分段三次功率曲线，输入为 m/s，输出统一为 kW。
 - 光伏模型：已于 7 月 15 日改为简化 PVWatts 型功率模型；环境温度替代组件温度以及光强口径仍需在后续核对。
 - 电池模型：已于 7 月 16 日口径下修正 SOC、效率、动作裁剪和请求/实际功率记录；0.95 的充放电效率后续可按 PCS 或实测数据调整。
-- 功率平衡：当前电池动作已不再被平衡逻辑自动改写；功率不足时通过削减电解槽请求消除实际缺口。弃电、请求功率缺额和平衡残差尚未显式输出，计划于 2026-07-20 实现。
+- 功率平衡：已显式输出风光总功率、电解槽请求/实际总功率、请求缺额、弃电和平衡残差；逐时结果与 24 小时累计能源账本均满足守恒。统一分层接口仍按 2026-07-23 计划实施。
 - 电解槽模型：当前 4 台电解槽共用一组功率上下限，后续改为 2 台碱性和 2 台 PEM 的逐台配置。
 
 ## 12. 7 月 13 日完成标准自检

@@ -22,6 +22,10 @@ def test_battery_configuration_matches_selected_enerone_system():
     assert params['max_discharge_power'] == pytest.approx(5963.2)
     assert params['charge_efficiency'] == pytest.approx(0.95)
     assert params['discharge_efficiency'] == pytest.approx(0.95)
+    assert params['min_soc'] == pytest.approx(0.0)
+    assert params['max_soc'] == pytest.approx(1.0)
+    assert params['recommended_min_soc'] == pytest.approx(0.2)
+    assert params['recommended_max_soc'] == pytest.approx(0.8)
     assert params['initial_soc'] == pytest.approx(0.5)
 
 
@@ -70,33 +74,51 @@ def test_one_hour_discharge_matches_soc_equation(env):
 
 
 def test_soc_limits_prevent_charge_and_discharge(env):
-    env.soc = 0.8
+    env.soc = 1.0
     charge_result = env._apply_physical_model(
         1200.0, 0.0, 1000.0, [0.0] * 4
     )
     assert charge_result['actual_charge_power'] == 0.0
-    assert charge_result['new_soc'] == pytest.approx(0.8)
+    assert charge_result['new_soc'] == pytest.approx(1.0)
+
+    env.soc = 0.0
+    discharge_result = env._apply_physical_model(
+        0.0, 0.0, -1000.0, [500.0] * 4
+    )
+    assert discharge_result['actual_discharge_power'] == 0.0
+    assert discharge_result['new_soc'] == pytest.approx(0.0)
+
+
+def test_soc_can_move_outside_recommended_range(env):
+    env.soc = 0.8
+    charge_result = env._apply_physical_model(
+        1200.0, 0.0, 1000.0, [0.0] * 4
+    )
+
+    assert charge_result['actual_charge_power'] == pytest.approx(1000.0)
+    assert charge_result['new_soc'] > 0.8
 
     env.soc = 0.2
     discharge_result = env._apply_physical_model(
         0.0, 0.0, -1000.0, [500.0] * 4
     )
-    assert discharge_result['actual_discharge_power'] == 0.0
-    assert discharge_result['new_soc'] == pytest.approx(0.2)
+
+    assert discharge_result['actual_discharge_power'] == pytest.approx(1000.0)
+    assert discharge_result['new_soc'] < 0.2
 
 
 def test_soc_headroom_limits_power_before_soc_update(env):
-    env.soc = 0.79
+    env.soc = 0.99
     result = env._apply_physical_model(
         wind_power=7000.0,
         pv_power=0.0,
         battery_power=5963.2,
         electrolyzer_powers=[0.0] * 4,
     )
-    expected_limit = (0.8 - 0.79) * 5963.2 / 0.95
+    expected_limit = (1.0 - 0.99) * 5963.2 / 0.95
 
     assert result['actual_charge_power'] == pytest.approx(expected_limit)
-    assert result['new_soc'] == pytest.approx(0.8)
+    assert result['new_soc'] == pytest.approx(1.0)
 
 
 def test_supply_direction_rejects_conflicting_battery_requests(env):
